@@ -36,6 +36,8 @@ from .storage import (
     ensure_project_dirs,
     list_project_summaries,
     load_project,
+    read_activity,
+    append_activity,
     safe_filename,
     save_project,
 )
@@ -92,20 +94,80 @@ def autosave_project(project_id: str, project: ProjectState):
 def transcribe_project(project_id: str):
     project = load_project(project_id)
     video_path = Path(project.source_media_path) if project.source_media_path else None
+    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
     if video_path and video_path.exists():
         try:
             project.captions = whisper_transcribe(video_path)
+            append_activity(project_id, [{
+                "ts": ts, "event": "transcribe_done",
+                "caption_count": len(project.captions),
+                "reason": f"Whisper transcribed {len(project.captions)} segments with word-level timestamps from {video_path.name}.",
+            }])
         except Exception as exc:
-            # Whisper failed — fall back to synthetic so the UI never breaks
             print(f"[whisper] transcription failed: {exc}")
             project.captions = synthetic_transcript(project.duration_seconds)
+            append_activity(project_id, [{
+                "ts": ts, "event": "transcribe_fallback",
+                "reason": f"Whisper failed ({exc}). Used synthetic transcript fallback.",
+            }])
     else:
         project.captions = synthetic_transcript(project.duration_seconds)
+        append_activity(project_id, [{
+            "ts": ts, "event": "transcribe_synthetic",
+            "reason": "No source video found. Generated synthetic placeholder transcript.",
+        }])
     return save_project(project)
 
 
-@app.post("/api/projects/{project_id}/auto-produce", response_model=ProjectState)
-def auto_produce(project_id: str):
+@app.get("/api/projects/{project_id}/activity-log")
+def get_activity_log(project_id: str):
+    return read_activity(project_id)
+
+
+@app.post("/api/projects/{project_id}/graphics", response_model=ProjectState)
+def add_graphic(project_id: str, payload: dict):
+    """Manually add a single graphic to the project timeline."""
+    import uuid as _uuid
+    from .models import MotionGraphicItem
+    project = load_project(project_id)
+    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
+    graphic = MotionGraphicItem(
+        id=f"gfx_{_uuid.uuid4().hex[:8]}",
+        start=float(payload.get("start", 0)),
+        end=float(payload.get("end", 1)),
+        template_id=payload.get("template_id", "contextual_broll"),
+        title=payload.get("title", "New Graphic"),
+        parameters=payload.get("parameters", {}),
+        track=payload.get("track", "V3"),
+        scale=float(payload.get("scale", 1.0)),
+    )
+    project.graphics.append(graphic)
+    append_activity(project_id, [{
+        "ts": ts, "event": "graphic_added_manual",
+        "graphic_id": graphic.id,
+        "template_id": graphic.template_id,
+        "title": graphic.title,
+        "track": graphic.track,
+        "start": graphic.start,
+        "end": graphic.end,
+        "reason": f"Manually added '{graphic.template_id}' graphic by user at {graphic.start:.2f}s on track {graphic.track}.",
+    }])
+    return save_project(project)
+
+
+@app.delete("/api/projects/{project_id}/graphics/{graphic_id}", response_model=ProjectState)
+def remove_graphic(project_id: str, graphic_id: str):
+    project = load_project(project_id)
+    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
+    before = len(project.graphics)
+    project.graphics = [g for g in project.graphics if g.id != graphic_id]
+    if len(project.graphics) < before:
+        append_activity(project_id, [{
+            "ts": ts, "event": "graphic_deleted",
+            "graphic_id": graphic_id,
+            "reason": f"Graphic {graphic_id} deleted by user.",
+        }])
+    return save_project(project)
     project = load_project(project_id)
     return save_project(run_auto_production(project))
 

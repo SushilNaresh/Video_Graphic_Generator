@@ -1,4 +1,5 @@
 import type {
+  ActivityEntry,
   ProjectState,
   ProjectSummary,
   RenderProgress,
@@ -56,6 +57,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ project_id: projectId, item })
     }),
+  getActivityLog: (projectId: string) => json<ActivityEntry[]>(`/api/projects/${projectId}/activity-log`),
+  addGraphic: (projectId: string, payload: object) =>
+    json<ProjectState>(`/api/projects/${projectId}/graphics`, { method: 'POST', body: JSON.stringify(payload) }),
+  deleteGraphic: (projectId: string, graphicId: string) =>
+    json<ProjectState>(`/api/projects/${projectId}/graphics/${graphicId}`, { method: 'DELETE' }),
   renderBurnin: (projectId: string) =>
     json<{ render_id: string; status: string; output_url?: string }>(`/api/media/${projectId}/render-burnin`, {
       method: 'POST',

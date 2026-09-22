@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileVideo, Scissors, Sparkles, Wand2 } from 'lucide-react';
 import { api } from './api/client';
+import { ActivityLog } from './components/ActivityLog';
 import { Inspector } from './components/Inspector';
 import { ProjectDrawer } from './components/ProjectDrawer';
 import { StatusPill } from './components/StatusPill';
 import { Timeline } from './components/Timeline';
 import { UploadDropzone } from './components/UploadDropzone';
 import { VideoViewer } from './components/VideoViewer';
-import type { MotionGraphicItem, ProjectState, ProjectSummary, RenderProgress } from './types';
+import type { ActivityEntry, MotionGraphicItem, ProjectState, ProjectSummary, RenderProgress } from './types';
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -18,16 +19,21 @@ export default function App() {
   const [status, setStatus] = useState('Booting studio...');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
+  const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
 
   const selectedGraphic = useMemo(
-    () => project?.graphics.find((graphic) => graphic.id === selectedGraphicId) ?? null,
+    () => project?.graphics.find((g) => g.id === selectedGraphicId) ?? null,
     [project, selectedGraphicId]
   );
 
+  const refreshActivity = useCallback(async (id: string) => {
+    try { setActivityLog(await api.getActivityLog(id)); } catch { /* silent */ }
+  }, []);
+
   async function refreshProjects() {
-    const nextProjects = await api.listProjects();
-    setProjects(nextProjects);
-    return nextProjects;
+    const next = await api.listProjects();
+    setProjects(next);
+    return next;
   }
 
   async function openProject(id: string) {
@@ -37,6 +43,7 @@ export default function App() {
     setSelectedGraphicId(next.graphics[0]?.id ?? null);
     setCurrentTime(0);
     setStatus(`Opened ${next.name}`);
+    await refreshActivity(id);
   }
 
   async function createProject() {
@@ -44,51 +51,35 @@ export default function App() {
     const next = await api.createProject(`Studio Project ${new Date().toLocaleTimeString()}`);
     setProject(next);
     setSelectedGraphicId(null);
+    setActivityLog([]);
     await refreshProjects();
     setStatus('New project ready');
   }
 
   async function deleteProject(id: string) {
-    const target = projects.find((item) => item.id === id);
+    const target = projects.find((p) => p.id === id);
     if (!window.confirm(`Delete "${target?.name ?? id}" and all uploaded media, assets, renders, and state?`)) return;
     setStatus('Deleting project...');
     try {
       await api.deleteProject(id);
-      const nextProjects = await refreshProjects();
+      const next = await refreshProjects();
       if (project?.id === id) {
-        setProject(null);
-        setSelectedGraphicId(null);
-        setCurrentTime(0);
-        setRenderProgress(null);
-        if (nextProjects[0]) {
-          await openProject(nextProjects[0].id);
-        } else {
-          await createProject();
-        }
-      } else {
-        setStatus('Project deleted');
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Delete failed');
-    }
+        setProject(null); setSelectedGraphicId(null); setCurrentTime(0); setRenderProgress(null); setActivityLog([]);
+        if (next[0]) await openProject(next[0].id); else await createProject();
+      } else { setStatus('Project deleted'); }
+    } catch (err) { setStatus(err instanceof Error ? err.message : 'Delete failed'); }
   }
 
   useEffect(() => {
     (async () => {
       try {
         const summaries = await refreshProjects();
-        if (summaries[0]) {
-          await openProject(summaries[0].id);
-        } else {
-          await createProject();
-        }
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : 'Failed to start studio');
-      }
+        if (summaries[0]) await openProject(summaries[0].id); else await createProject();
+      } catch (err) { setStatus(err instanceof Error ? err.message : 'Failed to start studio'); }
     })();
   }, []);
 
-  async function updateProject(updater: (project: ProjectState) => ProjectState) {
+  async function updateProject(updater: (p: ProjectState) => ProjectState) {
     if (!project) return;
     const optimistic = updater(project);
     setProject(optimistic);
@@ -96,9 +87,7 @@ export default function App() {
       const saved = await api.autosaveProject(optimistic);
       setProject(saved);
       setStatus('Autosaved');
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Autosave failed');
-    }
+    } catch (err) { setStatus(err instanceof Error ? err.message : 'Autosave failed'); }
   }
 
   async function handleUploadVideo(file: File) {
@@ -107,27 +96,25 @@ export default function App() {
     setUploadProgress(0);
     setStatus('Uploading video (0%)...');
     try {
-      const response = await api.uploadVideo(active.id, file, (progress) => {
-        setUploadProgress(progress);
-        setStatus(`Uploading video (${progress}%)...`);
+      const res = await api.uploadVideo(active.id, file, (pct) => {
+        setUploadProgress(pct);
+        setStatus(`Uploading video (${pct}%)...`);
       });
-      const fresh = response.project?.id ? response.project : await api.getProject(active.id);
+      const fresh = res.project?.id ? res.project : await api.getProject(active.id);
       setProject({ ...fresh, id: fresh.id || active.id, captions: fresh.captions ?? [], graphics: fresh.graphics ?? [] });
       setUploadProgress(null);
       await refreshProjects();
       setStatus('Upload complete. Ready to transcribe or auto-produce.');
-    } catch (error) {
-      setUploadProgress(null);
-      setStatus(error instanceof Error ? error.message : 'Upload failed');
-    }
+    } catch (err) { setUploadProgress(null); setStatus(err instanceof Error ? err.message : 'Upload failed'); }
   }
 
   async function runTranscription() {
     if (!project) return;
-    setStatus('Generating local transcript...');
+    setStatus('Transcribing audio with Whisper...');
     const next = await api.transcribe(project.id);
     setProject(next);
-    setStatus('Transcript ready');
+    setStatus(`Transcript ready — ${next.captions.length} segments`);
+    await refreshActivity(project.id);
   }
 
   async function runAutoProduction() {
@@ -136,7 +123,8 @@ export default function App() {
     const next = await api.autoProduce(project.id);
     setProject(next);
     setSelectedGraphicId(next.graphics[0]?.id ?? null);
-    setStatus('Auto-production complete');
+    setStatus(`Auto-production complete — ${next.graphics.length} graphics placed`);
+    await refreshActivity(project.id);
   }
 
   async function runTwelveLabsAnalysis() {
@@ -147,28 +135,47 @@ export default function App() {
     setProject(next);
     setSelectedGraphicId(task.graphics[0]?.id ?? next.graphics[0]?.id ?? null);
     setStatus(task.message || 'Analysis ready');
+    await refreshActivity(project.id);
   }
 
   async function renderBurnin() {
     if (!project) return;
     setStatus('Render queued...');
-    const response = await api.renderBurnin(project.id);
-    setRenderProgress({ render_id: response.render_id, status: 'queued', progress: 0, message: 'Queued' });
+    const res = await api.renderBurnin(project.id);
+    setRenderProgress({ render_id: res.render_id, status: 'queued', progress: 0, message: 'Queued' });
     const timer = window.setInterval(async () => {
-      const progress = await api.getRenderProgress(project.id);
-      setRenderProgress(progress);
-      setStatus(`Render ${Math.round(progress.progress * 100)}% — ${progress.message}`);
-      if (progress.status === 'ready' || progress.status === 'failed') {
+      const prog = await api.getRenderProgress(project.id);
+      setRenderProgress(prog);
+      setStatus(`Render ${Math.round(prog.progress * 100)}% — ${prog.message}`);
+      if (prog.status === 'ready' || prog.status === 'failed') {
         window.clearInterval(timer);
+        await refreshActivity(project.id);
       }
     }, 1000);
   }
 
   function upsertGraphic(graphic: MotionGraphicItem) {
-    updateProject((current) => ({
-      ...current,
-      graphics: current.graphics.map((item) => (item.id === graphic.id ? graphic : item))
-    }));
+    updateProject((p) => ({ ...p, graphics: p.graphics.map((g) => (g.id === graphic.id ? graphic : g)) }));
+  }
+
+  async function handleAddGraphic(payload: object) {
+    if (!project) return;
+    setStatus('Adding graphic...');
+    const next = await api.addGraphic(project.id, payload);
+    setProject(next);
+    setSelectedGraphicId(next.graphics[next.graphics.length - 1]?.id ?? null);
+    setStatus('Graphic added');
+    await refreshActivity(project.id);
+  }
+
+  async function handleDeleteGraphic(graphicId: string) {
+    if (!project) return;
+    setStatus('Removing graphic...');
+    const next = await api.deleteGraphic(project.id, graphicId);
+    setProject(next);
+    setSelectedGraphicId(null);
+    setStatus('Graphic removed');
+    await refreshActivity(project.id);
   }
 
   const canEdit = Boolean(project);
@@ -183,13 +190,7 @@ export default function App() {
             <p>WYSIWYG burn-in editor</p>
           </div>
         </div>
-        <ProjectDrawer
-          projects={projects}
-          activeId={project?.id ?? null}
-          onOpen={openProject}
-          onCreate={createProject}
-          onDelete={deleteProject}
-        />
+        <ProjectDrawer projects={projects} activeId={project?.id ?? null} onOpen={openProject} onCreate={createProject} onDelete={deleteProject} />
         <UploadDropzone disabled={!canEdit} progress={uploadProgress} onUpload={handleUploadVideo} />
       </aside>
 
@@ -209,37 +210,26 @@ export default function App() {
 
         <div className="viewer-grid">
           <VideoViewer
-            project={project}
-            currentTime={currentTime}
-            playing={playing}
+            project={project} currentTime={currentTime} playing={playing}
             selectedGraphicId={selectedGraphicId}
-            onTimeUpdate={setCurrentTime}
-            onPlayingChange={setPlaying}
-            onSelectGraphic={setSelectedGraphicId}
+            onTimeUpdate={setCurrentTime} onPlayingChange={setPlaying} onSelectGraphic={setSelectedGraphicId}
           />
           <Inspector
-            project={project}
-            selectedGraphic={selectedGraphic}
-            onProjectChange={setProject}
-            onGraphicChange={upsertGraphic}
-            onStatus={setStatus}
-            renderProgress={renderProgress}
-            onRender={renderBurnin}
-            downloadUrl={project ? api.downloadMp4Url(project.id) : null}
+            project={project} selectedGraphic={selectedGraphic} currentTime={currentTime}
+            onProjectChange={setProject} onGraphicChange={upsertGraphic}
+            onGraphicDelete={handleDeleteGraphic} onGraphicAdd={handleAddGraphic}
+            onStatus={setStatus} renderProgress={renderProgress}
+            onRender={renderBurnin} downloadUrl={project ? api.downloadMp4Url(project.id) : null}
           />
         </div>
 
         <Timeline
-          project={project}
-          currentTime={currentTime}
-          selectedGraphicId={selectedGraphicId}
-          onSeek={setCurrentTime}
-          onSelectGraphic={setSelectedGraphicId}
-          onProjectChange={setProject}
+          project={project} currentTime={currentTime} selectedGraphicId={selectedGraphicId}
+          onSeek={setCurrentTime} onSelectGraphic={setSelectedGraphicId} onProjectChange={setProject}
         />
+
+        <ActivityLog entries={activityLog} onJumpTo={setCurrentTime} />
       </section>
-
-
     </main>
   );
 }

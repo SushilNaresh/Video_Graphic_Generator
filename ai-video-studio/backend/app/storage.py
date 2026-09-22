@@ -131,3 +131,32 @@ def write_json(path: Path, payload: object) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+ACTIVITY_LOG_FILE = "activity_log.json"
+
+
+def activity_log_path(project_id: str) -> Path:
+    return project_dir(project_id) / ACTIVITY_LOG_FILE
+
+
+def append_activity(project_id: str, entries: list[dict]) -> None:
+    """Append entries to the project activity log (creates if missing)."""
+    path = activity_log_path(project_id)
+    existing: list[dict] = []
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = []
+    write_json(path, existing + entries)
+
+
+def read_activity(project_id: str) -> list[dict]:
+    path = activity_log_path(project_id)
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []

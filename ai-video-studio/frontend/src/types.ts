@@ -1,6 +1,21 @@
 export type AspectRatio = '9:16' | '16:9' | '1:1';
 export type TrackId = 'V5' | 'V4' | 'V3' | 'V2' | 'V1' | 'A1' | 'A2';
 
+export interface ActivityEntry {
+  ts: string;
+  event: string;
+  reason: string;
+  graphic_id?: string;
+  template_id?: string;
+  title?: string;
+  track?: string;
+  start?: number;
+  end?: number;
+  caption_count?: number;
+  graphic_count?: number;
+  search_query?: string;
+}
+
 export type GraphicTemplateId =
   | 'split_screen_vertical'
   | 'article_reconstruction'
