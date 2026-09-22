@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api/client';
-import type { CaptionStyle, MotionGraphicItem, ProjectState, StockMediaItem } from '../types';
+import type { CaptionStyle, MotionGraphicItem, ProjectState, RenderProgress, StockMediaItem } from '../types';
+import { ExportPanel } from './ExportPanel';
 
 const DEFAULT_STYLE: CaptionStyle = {
   font_family: 'Inter',
@@ -25,13 +26,19 @@ export function Inspector({
   selectedGraphic,
   onProjectChange,
   onGraphicChange,
-  onStatus
+  onStatus,
+  renderProgress,
+  onRender,
+  downloadUrl
 }: {
   project: ProjectState | null;
   selectedGraphic: MotionGraphicItem | null;
   onProjectChange: (project: ProjectState) => void;
   onGraphicChange: (graphic: MotionGraphicItem) => void;
   onStatus: (status: string) => void;
+  renderProgress: RenderProgress | null;
+  onRender: () => void;
+  downloadUrl: string | null;
 }) {
   const [tab, setTab] = useState<'subtitles' | 'graphics' | 'export' | 'ai'>('subtitles');
   const [stockQuery, setStockQuery] = useState('medical research report');
@@ -156,7 +163,14 @@ export function Inspector({
 
       {tab === 'export' && (
         <div className="stack">
-          <h3>Export Settings</h3>
+          <ExportPanel
+            project={project}
+            renderProgress={renderProgress}
+            onRender={onRender}
+            downloadUrl={downloadUrl}
+          />
+          <div className="export-divider" />
+          <h3>Settings</h3>
           <Field label="Aspect ratio">
             <select value={project.settings.aspect_ratio} onChange={(event) => onProjectChange({ ...project, settings: { ...project.settings, aspect_ratio: event.target.value as ProjectState['settings']['aspect_ratio'] } })}>
               <option value="9:16">9:16 Vertical</option><option value="16:9">16:9 Landscape</option><option value="1:1">1:1 Square</option>

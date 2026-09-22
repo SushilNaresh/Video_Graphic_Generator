@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, FileVideo, Loader2, Scissors, Sparkles, Wand2 } from 'lucide-react';
+import { FileVideo, Scissors, Sparkles, Wand2 } from 'lucide-react';
 import { api } from './api/client';
-import { ExportPanel } from './components/ExportPanel';
 import { Inspector } from './components/Inspector';
 import { ProjectDrawer } from './components/ProjectDrawer';
 import { StatusPill } from './components/StatusPill';
@@ -224,6 +223,9 @@ export default function App() {
             onProjectChange={setProject}
             onGraphicChange={upsertGraphic}
             onStatus={setStatus}
+            renderProgress={renderProgress}
+            onRender={renderBurnin}
+            downloadUrl={project ? api.downloadMp4Url(project.id) : null}
           />
         </div>
 
@@ -237,18 +239,7 @@ export default function App() {
         />
       </section>
 
-      <aside className="right-rail">
-        <ExportPanel
-          project={project}
-          renderProgress={renderProgress}
-          onRender={renderBurnin}
-          downloadUrl={project ? api.downloadMp4Url(project.id) : null}
-        />
-        {renderProgress?.status === 'running' && <div className="render-loader"><Loader2 className="spin" size={18} /> Rendering burn-in...</div>}
-        {renderProgress?.status === 'ready' && project && (
-          <a className="download-card" href={api.downloadMp4Url(project.id)}><Download size={18} /> Download MP4</a>
-        )}
-      </aside>
+
     </main>
   );
 }
