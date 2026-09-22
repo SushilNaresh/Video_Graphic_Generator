@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, Response
 
 from . import renderer, stock_media, twelve_labs
 from .auto_producer import run_auto_production, synthetic_transcript
+from .whisper_transcribe import transcribe as whisper_transcribe
 from .media_utils import (
     create_proxy,
     decode_upload_filename,
@@ -90,7 +91,16 @@ def autosave_project(project_id: str, project: ProjectState):
 @app.post("/api/projects/{project_id}/transcribe", response_model=ProjectState)
 def transcribe_project(project_id: str):
     project = load_project(project_id)
-    project.captions = synthetic_transcript(project.duration_seconds)
+    video_path = Path(project.source_media_path) if project.source_media_path else None
+    if video_path and video_path.exists():
+        try:
+            project.captions = whisper_transcribe(video_path)
+        except Exception as exc:
+            # Whisper failed — fall back to synthetic so the UI never breaks
+            print(f"[whisper] transcription failed: {exc}")
+            project.captions = synthetic_transcript(project.duration_seconds)
+    else:
+        project.captions = synthetic_transcript(project.duration_seconds)
     return save_project(project)
 
 
