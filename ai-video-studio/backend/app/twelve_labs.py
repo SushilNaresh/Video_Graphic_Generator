@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from .auto_producer import run_auto_production
 from .models import ProjectState, TaskStatus, TwelveLabsCredits
-from .storage import PROJECTS_DIR, ensure_projects_dir, save_project, write_json
+from .storage import PROJECTS_DIR, append_activity, ensure_projects_dir, save_project, write_json
 
 TASKS: dict[str, TaskStatus] = {}
 KEY_FILE = "twelve_labs_key.json"
 USAGE_FILE = "twelve_labs_usage.json"
+
+
+def _ts() -> str:
+    return datetime.utcnow().isoformat() + "Z"
 
 
 def _key_path() -> Path:
@@ -40,6 +45,14 @@ def credits() -> TwelveLabsCredits:
 
 def analyze_project(project: ProjectState) -> TaskStatus:
     task_id = f"tl_{uuid.uuid4().hex[:10]}"
+    append_activity(project.id, [{
+        "ts": _ts(), "event": "twelve_labs_analyze_start",
+        "reason": (
+            f"Twelve Labs analyze_project called. Task id: {task_id}. "
+            "Running local semantic engine (stub). "
+            "Configure TWELVE_LABS_API_KEY to enable real Pegasus 1.5 video intelligence."
+        ),
+    }])
     project = run_auto_production(project)
     save_project(project)
     status = TaskStatus(
@@ -50,6 +63,14 @@ def analyze_project(project: ProjectState) -> TaskStatus:
         graphics=project.graphics,
     )
     TASKS[task_id] = status
+    append_activity(project.id, [{
+        "ts": _ts(), "event": "twelve_labs_analyze_done",
+        "graphic_count": len(project.graphics),
+        "reason": (
+            f"Analysis complete via local engine. {len(project.graphics)} graphics placed. "
+            f"Task {task_id} marked ready."
+        ),
+    }])
     return status
 
 

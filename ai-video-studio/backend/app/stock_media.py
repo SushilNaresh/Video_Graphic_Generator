@@ -282,15 +282,34 @@ def auto_download_for_graphic(project_id: str, search_query: str, media_type: st
     Search + download the best matching stock asset for a graphic automatically.
     Returns the media_url string to attach to the graphic, or None on failure.
     """
+    from .storage import append_activity
+    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
     try:
         results = search_stock(search_query, media_type)
-        # Prefer real providers over local placeholders
         real = [r for r in results.results if r.provider != "local-placeholder"]
         item = real[0] if real else (results.results[0] if results.results else None)
         if not item:
+            append_activity(project_id, [{
+                "ts": ts, "event": "stock_auto_download_skip",
+                "search_query": search_query,
+                "reason": f"Auto-download skipped for '{search_query}' — no results returned.",
+            }])
             return None
         from .models import StockDownloadRequest
         resp = download_stock(StockDownloadRequest(project_id=project_id, item=item))
+        append_activity(project_id, [{
+            "ts": ts, "event": "stock_auto_downloaded",
+            "search_query": search_query,
+            "reason": (
+                f"Auto-downloaded '{item.title}' from {item.provider} "
+                f"for query '{search_query}'. Saved as '{resp.filename}'."
+            ),
+        }])
         return resp.media_url
-    except Exception:
+    except Exception as exc:
+        append_activity(project_id, [{
+            "ts": ts, "event": "stock_auto_download_failed",
+            "search_query": search_query,
+            "reason": f"Auto-download failed for '{search_query}': {exc}. Graphic will render without media.",
+        }])
         return None

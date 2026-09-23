@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -37,16 +38,21 @@ from .models import (
     UploadResponse,
 )
 from .storage import (
+    append_activity,
     delete_project,
     default_project,
     ensure_project_dirs,
     list_project_summaries,
     load_project,
     read_activity,
-    append_activity,
     safe_filename,
     save_project,
 )
+
+
+def _ts() -> str:
+    return datetime.utcnow().isoformat() + "Z"
+
 
 app = FastAPI(title="AI Video Studio API", version="0.1.0")
 
@@ -59,10 +65,14 @@ app.add_middleware(
 )
 
 
+# ── Health ────────────────────────────────────────────────────────────────────
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "ai-video-studio"}
 
+
+# ── Projects ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/projects")
 def list_projects():
@@ -71,8 +81,14 @@ def list_projects():
 
 @app.post("/api/projects", response_model=ProjectState)
 def create_project(payload: dict | None = None):
-    project = default_project(name=(payload or {}).get("name"))
-    return save_project(project)
+    name = (payload or {}).get("name") or "Untitled Video Studio Project"
+    project = default_project(name=name)
+    project = save_project(project)
+    append_activity(project.id, [{
+        "ts": _ts(), "event": "project_created",
+        "reason": f"New project '{project.name}' created with id {project.id}.",
+    }])
+    return project
 
 
 @app.get("/api/projects/{project_id}", response_model=ProjectState)
@@ -93,50 +109,90 @@ def remove_project(project_id: str):
 def autosave_project(project_id: str, project: ProjectState):
     if project.id != project_id:
         project.id = project_id
-    return save_project(project)
+    saved = save_project(project)
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "project_autosaved",
+        "reason": (
+            f"Project autosaved — {len(project.captions)} captions, "
+            f"{len(project.graphics)} graphics, duration {project.duration_seconds:.1f}s."
+        ),
+    }])
+    return saved
 
+
+# ── Transcribe ────────────────────────────────────────────────────────────────
 
 @app.post("/api/projects/{project_id}/transcribe", response_model=ProjectState)
 def transcribe_project(project_id: str):
     project = load_project(project_id)
     video_path = Path(project.source_media_path) if project.source_media_path else None
-    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
+    ts = _ts()
+    append_activity(project_id, [{
+        "ts": ts, "event": "transcribe_start",
+        "reason": f"Transcription requested. Source: {video_path.name if video_path else 'none'}.",
+    }])
     if video_path and video_path.exists():
         try:
             project.captions = whisper_transcribe(video_path)
             append_activity(project_id, [{
-                "ts": ts, "event": "transcribe_done",
+                "ts": _ts(), "event": "transcribe_done",
                 "caption_count": len(project.captions),
-                "reason": f"Whisper transcribed {len(project.captions)} segments with word-level timestamps from {video_path.name}.",
+                "reason": (
+                    f"Whisper (faster-whisper base model) transcribed {len(project.captions)} segments "
+                    f"with word-level timestamps from '{video_path.name}'. "
+                    f"Language auto-detected. VAD filter applied to skip silence."
+                ),
             }])
         except Exception as exc:
-            print(f"[whisper] transcription failed: {exc}")
             project.captions = synthetic_transcript(project.duration_seconds)
             append_activity(project_id, [{
-                "ts": ts, "event": "transcribe_fallback",
-                "reason": f"Whisper failed ({exc}). Used synthetic transcript fallback.",
+                "ts": _ts(), "event": "transcribe_fallback",
+                "reason": (
+                    f"Whisper failed: {exc}. "
+                    f"Fell back to synthetic {len(project.captions)}-line placeholder transcript."
+                ),
             }])
     else:
         project.captions = synthetic_transcript(project.duration_seconds)
         append_activity(project_id, [{
-            "ts": ts, "event": "transcribe_synthetic",
-            "reason": "No source video found. Generated synthetic placeholder transcript.",
+            "ts": _ts(), "event": "transcribe_synthetic",
+            "reason": "No source video on disk. Generated synthetic placeholder transcript.",
         }])
     return save_project(project)
 
+
+# ── Auto Produce ──────────────────────────────────────────────────────────────
+
+@app.post("/api/projects/{project_id}/auto-produce", response_model=ProjectState)
+def auto_produce(project_id: str):
+    project = load_project(project_id)
+    ts = _ts()
+    append_activity(project_id, [{
+        "ts": ts, "event": "auto_produce_requested",
+        "reason": (
+            f"Auto Produce triggered by user. "
+            f"Project has {len(project.captions)} existing captions and "
+            f"{len(project.graphics)} existing graphics."
+        ),
+    }])
+    project = run_auto_production(project)
+    return save_project(project)
+
+
+# ── Activity Log ──────────────────────────────────────────────────────────────
 
 @app.get("/api/projects/{project_id}/activity-log")
 def get_activity_log(project_id: str):
     return read_activity(project_id)
 
 
+# ── Manual Graphics ───────────────────────────────────────────────────────────
+
 @app.post("/api/projects/{project_id}/graphics", response_model=ProjectState)
 def add_graphic(project_id: str, payload: dict):
-    """Manually add a single graphic to the project timeline."""
     import uuid as _uuid
     from .models import MotionGraphicItem
     project = load_project(project_id)
-    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
     graphic = MotionGraphicItem(
         id=f"gfx_{_uuid.uuid4().hex[:8]}",
         start=float(payload.get("start", 0)),
@@ -149,14 +205,17 @@ def add_graphic(project_id: str, payload: dict):
     )
     project.graphics.append(graphic)
     append_activity(project_id, [{
-        "ts": ts, "event": "graphic_added_manual",
+        "ts": _ts(), "event": "graphic_added_manual",
         "graphic_id": graphic.id,
         "template_id": graphic.template_id,
         "title": graphic.title,
         "track": graphic.track,
         "start": graphic.start,
         "end": graphic.end,
-        "reason": f"Manually added '{graphic.template_id}' graphic by user at {graphic.start:.2f}s on track {graphic.track}.",
+        "reason": (
+            f"User manually placed '{graphic.template_id}' graphic titled '{graphic.title}' "
+            f"at {graphic.start:.2f}s–{graphic.end:.2f}s on track {graphic.track}."
+        ),
     }])
     return save_project(project)
 
@@ -164,19 +223,26 @@ def add_graphic(project_id: str, payload: dict):
 @app.delete("/api/projects/{project_id}/graphics/{graphic_id}", response_model=ProjectState)
 def remove_graphic(project_id: str, graphic_id: str):
     project = load_project(project_id)
-    ts = __import__('datetime').datetime.utcnow().isoformat() + 'Z'
-    before = len(project.graphics)
+    target = next((g for g in project.graphics if g.id == graphic_id), None)
     project.graphics = [g for g in project.graphics if g.id != graphic_id]
-    if len(project.graphics) < before:
+    if target:
         append_activity(project_id, [{
-            "ts": ts, "event": "graphic_deleted",
+            "ts": _ts(), "event": "graphic_deleted",
             "graphic_id": graphic_id,
-            "reason": f"Graphic {graphic_id} deleted by user.",
+            "template_id": target.template_id,
+            "title": target.title,
+            "track": target.track,
+            "start": target.start,
+            "end": target.end,
+            "reason": (
+                f"User deleted '{target.template_id}' graphic '{target.title}' "
+                f"({target.start:.2f}s–{target.end:.2f}s, track {target.track})."
+            ),
         }])
     return save_project(project)
-    project = load_project(project_id)
-    return save_project(run_auto_production(project))
 
+
+# ── Media Upload ──────────────────────────────────────────────────────────────
 
 @app.post("/api/media/{project_id}/upload", response_model=UploadResponse)
 async def upload_video_stream(
@@ -188,8 +254,13 @@ async def upload_video_stream(
     pdir = ensure_project_dirs(project_id)
     filename = decode_upload_filename(x_filename)
     destination = pdir / "media" / filename
-    bytes_written = await stream_request_to_file(request, project_id, destination, content_length=content_length)
 
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "upload_start",
+        "reason": f"Video upload started: '{filename}' ({(content_length or 0) // (1024*1024)} MB).",
+    }])
+
+    bytes_written = await stream_request_to_file(request, project_id, destination, content_length=content_length)
     duration = probe_duration(destination)
     proxy_path = create_proxy(destination, pdir / "proxies" / "proxy_720p.mp4")
 
@@ -200,13 +271,18 @@ async def upload_video_stream(
     project.duration_seconds = duration
     project = save_project(project)
 
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "upload_done",
+        "reason": (
+            f"Upload complete: '{filename}' — {bytes_written // (1024*1024)} MB written. "
+            f"Duration: {duration:.1f}s. "
+            f"Proxy: {'symlink' if Path(proxy_path).is_symlink() else 'transcoded'}."
+        ),
+    }])
+
     return UploadResponse(
-        id=project.id,
-        project_id=project.id,
-        filename=filename,
-        bytes_written=bytes_written,
-        duration_seconds=duration,
-        project=project,
+        id=project.id, project_id=project.id, filename=filename,
+        bytes_written=bytes_written, duration_seconds=duration, project=project,
     )
 
 
@@ -217,17 +293,25 @@ def source_video(project_id: str, request: Request):
     return ranged_file_response(path, request)
 
 
+# ── Asset Upload ──────────────────────────────────────────────────────────────
+
 @app.post("/api/media/{project_id}/upload-asset")
 async def upload_asset(project_id: str, file: UploadFile):
     pdir = ensure_project_dirs(project_id)
     filename = safe_filename(file.filename or "asset.bin")
     path = pdir / "assets" / filename
+    size = 0
     with path.open("wb") as handle:
         while True:
             chunk = await file.read(64 * 1024)
             if not chunk:
                 break
+            size += len(chunk)
             handle.write(chunk)
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "asset_uploaded",
+        "reason": f"Custom asset '{filename}' uploaded ({size // 1024} KB). Saved to assets/.",
+    }])
     return {"filename": filename, "url": f"/api/media/{project_id}/asset/{filename}"}
 
 
@@ -245,9 +329,23 @@ def get_downloaded_asset(project_id: str, filename: str, request: Request):
     return ranged_file_response(path, request)
 
 
+# ── Stock Media ───────────────────────────────────────────────────────────────
+
 @app.get("/api/media/stock/search", response_model=StockSearchResponse)
-def stock_search(q: str, media_type: str = "image"):
-    return stock_media.search_stock(q, media_type=media_type)
+def stock_search(q: str, media_type: str = "image", project_id: str | None = None):
+    result = stock_media.search_stock(q, media_type=media_type)
+    if project_id:
+        providers = list({r.provider for r in result.results})
+        real_count = sum(1 for r in result.results if r.provider != "local-placeholder")
+        append_activity(project_id, [{
+            "ts": _ts(), "event": "stock_search",
+            "search_query": q,
+            "reason": (
+                f"Stock search for '{q}' ({media_type}) returned {len(result.results)} results "
+                f"({real_count} real, rest placeholders). Providers: {', '.join(providers)}."
+            ),
+        }])
+    return result
 
 
 @app.get("/api/media/stock/placeholder/{item_id}.svg")
@@ -257,8 +355,19 @@ def stock_placeholder(item_id: str, title: str | None = None):
 
 @app.post("/api/media/stock/download", response_model=StockDownloadResponse)
 def stock_download(request: StockDownloadRequest):
-    return stock_media.download_stock(request)
+    result = stock_media.download_stock(request)
+    append_activity(request.project_id, [{
+        "ts": _ts(), "event": "stock_downloaded",
+        "search_query": request.item.title,
+        "reason": (
+            f"Stock asset '{request.item.title}' downloaded from {request.item.provider}. "
+            f"Saved as '{result.filename}'. Attached to project media."
+        ),
+    }])
+    return result
 
+
+# ── Twelve Labs ───────────────────────────────────────────────────────────────
 
 @app.get("/api/media/twelve-labs/credits", response_model=TwelveLabsCredits)
 def get_twelve_labs_credits():
@@ -267,12 +376,31 @@ def get_twelve_labs_credits():
 
 @app.post("/api/media/twelve-labs/set-key")
 def set_twelve_labs_key(payload: TwelveLabsKeyRequest):
-    return twelve_labs.set_key(payload.api_key)
+    result = twelve_labs.set_key(payload.api_key)
+    # Log to all open projects is not practical; key is global — no project_id here
+    return result
 
 
 @app.post("/api/media/{project_id}/twelve-labs/analyze", response_model=TaskStatus)
 def analyze_twelve_labs(project_id: str):
-    return twelve_labs.analyze_project(load_project(project_id))
+    project = load_project(project_id)
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "analyze_start",
+        "reason": (
+            "Twelve Labs Analyze triggered. Running local semantic engine "
+            "(stub — configure Twelve Labs API key for real video intelligence)."
+        ),
+    }])
+    task = twelve_labs.analyze_project(project)
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "analyze_done",
+        "graphic_count": len(task.graphics),
+        "reason": (
+            f"Analysis complete. {len(task.graphics)} graphics generated. "
+            f"Task id: {task.task_id}. Status: {task.status}."
+        ),
+    }])
+    return task
 
 
 @app.get("/api/media/twelve-labs/task/{task_id}", response_model=TaskStatus)
@@ -280,16 +408,44 @@ def get_twelve_labs_task(task_id: str):
     return twelve_labs.task(task_id)
 
 
+# ── Render ────────────────────────────────────────────────────────────────────
+
 @app.post("/api/media/{project_id}/render-burnin", response_model=RenderResponse)
 def render_burnin(project_id: str):
     project = load_project(project_id)
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "render_start",
+        "reason": (
+            f"Burn-in render started. Source: '{Path(project.source_media_path or '').name}'. "
+            f"Graphics: {len(project.graphics)}, Captions: {len(project.captions)}. "
+            f"Encoder: h264_videotoolbox (falls back to stream copy)."
+        ),
+    }])
     render_id, output_url = renderer.start_render(project)
     return RenderResponse(render_id=render_id, status="queued", output_url=output_url)
 
 
 @app.get("/api/media/{project_id}/burnin-progress", response_model=RenderProgress)
 def burnin_progress(project_id: str):
-    return renderer.get_render_progress(project_id)
+    progress = renderer.get_render_progress(project_id)
+    # Log terminal states once (renderer sets them exactly once)
+    if progress.status == "ready" and progress.progress == 1.0:
+        existing = read_activity(project_id)
+        already_logged = any(e.get("event") == "render_done" for e in existing[-5:])
+        if not already_logged:
+            append_activity(project_id, [{
+                "ts": _ts(), "event": "render_done",
+                "reason": f"Render complete. Output ready for download. Render id: {progress.render_id}.",
+            }])
+    elif progress.status == "failed":
+        existing = read_activity(project_id)
+        already_logged = any(e.get("event") == "render_failed" for e in existing[-5:])
+        if not already_logged:
+            append_activity(project_id, [{
+                "ts": _ts(), "event": "render_failed",
+                "reason": f"Render failed: {progress.message}.",
+            }])
+    return progress
 
 
 @app.get("/api/media/{project_id}/download-mp4")
@@ -297,4 +453,8 @@ def download_mp4(project_id: str):
     path = renderer.latest_render_path(project_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Rendered file not found")
+    append_activity(project_id, [{
+        "ts": _ts(), "event": "render_downloaded",
+        "reason": f"Rendered MP4 downloaded by user. File: '{path.name}' ({path.stat().st_size // (1024*1024)} MB).",
+    }])
     return FileResponse(path, media_type="video/mp4", filename=f"{project_id}_burned.mp4")
