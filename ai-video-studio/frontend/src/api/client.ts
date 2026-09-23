@@ -3,6 +3,7 @@ import type {
   ProjectState,
   ProjectSummary,
   RenderProgress,
+  SkillNote,
   StockMediaItem,
   StockSearchResponse,
   TaskStatus,
@@ -58,6 +59,9 @@ export const api = {
       body: JSON.stringify({ project_id: projectId, item })
     }),
   getActivityLog: (projectId: string) => json<ActivityEntry[]>(`/api/projects/${projectId}/activity-log`),
+  getSkillNotes: (projectId: string) => json<SkillNote[]>(`/api/projects/${projectId}/skill-notes`),
+  addSkillNote: (projectId: string, payload: Omit<SkillNote, 'ts' | 'author'>) =>
+    json<SkillNote>(`/api/projects/${projectId}/skill-notes`, { method: 'POST', body: JSON.stringify(payload) }),
   addGraphic: (projectId: string, payload: object) =>
     json<ProjectState>(`/api/projects/${projectId}/graphics`, { method: 'POST', body: JSON.stringify(payload) }),
   deleteGraphic: (projectId: string, graphicId: string) =>

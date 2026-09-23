@@ -8,7 +8,7 @@ import { StatusPill } from './components/StatusPill';
 import { Timeline } from './components/Timeline';
 import { UploadDropzone } from './components/UploadDropzone';
 import { VideoViewer } from './components/VideoViewer';
-import type { ActivityEntry, MotionGraphicItem, ProjectState, ProjectSummary, RenderProgress } from './types';
+import type { ActivityEntry, MotionGraphicItem, ProjectState, ProjectSummary, RenderProgress, SkillNote } from './types';
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -20,6 +20,7 @@ export default function App() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityEntry[]>([]);
+  const [skillNotes, setSkillNotes] = useState<SkillNote[]>([]);
 
   const selectedGraphic = useMemo(
     () => project?.graphics.find((g) => g.id === selectedGraphicId) ?? null,
@@ -27,7 +28,11 @@ export default function App() {
   );
 
   const refreshActivity = useCallback(async (id: string) => {
-    try { setActivityLog(await api.getActivityLog(id)); } catch { /* silent */ }
+    try {
+      const [log, notes] = await Promise.all([api.getActivityLog(id), api.getSkillNotes(id)]);
+      setActivityLog(log);
+      setSkillNotes(notes);
+    } catch { /* silent */ }
   }, []);
 
   async function refreshProjects() {
@@ -154,6 +159,12 @@ export default function App() {
     }, 1000);
   }
 
+  async function handleAddSkillNote(graphicId: string, templateId: string, trigger: string, note: string) {
+    if (!project) return;
+    await api.addSkillNote(project.id, { graphic_id: graphicId, template_id: templateId, trigger, note });
+    await refreshActivity(project.id);
+  }
+
   function upsertGraphic(graphic: MotionGraphicItem) {
     updateProject((p) => ({ ...p, graphics: p.graphics.map((g) => (g.id === graphic.id ? graphic : g)) }));
   }
@@ -228,7 +239,7 @@ export default function App() {
           onSeek={setCurrentTime} onSelectGraphic={setSelectedGraphicId} onProjectChange={setProject}
         />
 
-        <ActivityLog entries={activityLog} onJumpTo={setCurrentTime} />
+        <ActivityLog entries={activityLog} skillNotes={skillNotes} onJumpTo={setCurrentTime} onAddNote={handleAddSkillNote} />
       </section>
     </main>
   );

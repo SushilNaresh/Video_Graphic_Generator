@@ -134,6 +134,7 @@ def write_json(path: Path, payload: object) -> None:
 
 
 ACTIVITY_LOG_FILE = "activity_log.json"
+SKILL_NOTES_FILE = "skill_notes.json"
 
 
 def activity_log_path(project_id: str) -> Path:
@@ -154,6 +155,32 @@ def append_activity(project_id: str, entries: list[dict]) -> None:
 
 def read_activity(project_id: str) -> list[dict]:
     path = activity_log_path(project_id)
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def skill_notes_path(project_id: str) -> Path:
+    return project_dir(project_id) / SKILL_NOTES_FILE
+
+
+def append_skill_note(project_id: str, note: dict) -> None:
+    """Append a manual skill note to skill_notes.json."""
+    path = skill_notes_path(project_id)
+    existing: list[dict] = []
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = []
+    write_json(path, existing + [note])
+
+
+def read_skill_notes(project_id: str) -> list[dict]:
+    path = skill_notes_path(project_id)
     if not path.exists():
         return []
     try:

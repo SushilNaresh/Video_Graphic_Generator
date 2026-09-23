@@ -263,15 +263,19 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
 
         # ── Measurements → dimension_callout ──────────────────────────────
         for m in MEASUREMENT_RE.finditer(text):
+            print(f"[TRIGGER] dimension_callout | match='{m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
             graphics.append(_dimension_callout(m.group(0), s))
 
         # ── Stats / percentages → stat_counter ───────────────────────────
         stat_m = STAT_RE.search(text)
         if stat_m and not MEASUREMENT_RE.search(text):
+            print(f"[TRIGGER] stat_counter | match='{stat_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
             graphics.append(_stat_counter(stat_m.group(1), stat_m.group(2), s))
 
         # ── Research / study reference → article_reconstruction ──────────
-        if CITATION_RE.search(text) and not article_added:
+        cite_m = CITATION_RE.search(text)
+        if cite_m and not article_added:
+            print(f"[TRIGGER] article_reconstruction | match='{cite_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
             g = _article(s, e + 4.0, title=text[:60].rstrip(".,:") + "…", paragraph=text, highlight=text[:80])
             graphics.append(g)
             article_added = True
@@ -280,16 +284,19 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
         # ── Medical jargon → jargon_translation ──────────────────────────
         jargon_m = JARGON_RE.search(text)
         if jargon_m:
+            print(f"[TRIGGER] jargon_translation | match='{jargon_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
             graphics.append(_jargon_card(jargon_m.group(0), s))
             continue
 
         # ── Comparative statement → split_screen_vertical ────────────────
-        if COMPARATIVE_RE.search(text):
+        comp_m = COMPARATIVE_RE.search(text)
+        if comp_m:
+            print(f"[TRIGGER] split_screen_vertical | match='{comp_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
             query = f"comparison {' '.join(text.split()[:4])}"
             media_url = auto_download_for_graphic(project.id, query)
             graphics.append(_split_screen(
                 query,
-                f"Comparative language detected ('{COMPARATIVE_RE.search(text).group(0)}') — split screen shows contrast.",
+                f"Comparative language detected ('{comp_m.group(0)}') — split screen shows contrast.",
                 s, e, media_url,
             ))
             continue
@@ -297,6 +304,7 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
         # ── Topic keyword → contextual_broll ─────────────────────────────
         for keyword, query, reasoning_label, track, dur in TOPIC_RULES:
             if keyword in lowered:
+                print(f"[TRIGGER] contextual_broll | keyword='{keyword}' | query='{query}' | caption='{text[:60]}' | t={s:.2f}s")
                 media_url = auto_download_for_graphic(project.id, query)
                 g = _broll(query, f"Topic '{keyword}' detected — B-roll illustrates the concept.", s, e, media_url)
                 graphics.append(g)

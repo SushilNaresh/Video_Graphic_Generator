@@ -29,3 +29,27 @@ Use this skill when editing the fresh AI Video Studio codebase generated from `S
 3. `npm run build` in `frontend`.
 4. Start backend on `8002` and frontend on `5173`.
 5. Upload a large video and confirm progress displays without browser memory spikes.
+
+## Trigger engine logic (`auto_producer.py`)
+
+Each caption is tested in priority order — first match wins (except measurements which stack):
+
+| Priority | Regex / Rule | Template | Track | Duration |
+|----------|-------------|----------|-------|----------|
+| 1 | `MEASUREMENT_RE` — numbers with units (cm, mm, ft, %, stage N) | `dimension_callout` | V5 | 2.5s |
+| 2 | `STAT_RE` — numbers with %, times, x, fold (no measurement match) | `stat_counter` | V5 | 3.0s |
+| 3 | `CITATION_RE` — "according to", journal names, study types (first only) | `article_reconstruction` | V4 | ≥5.0s |
+| 4 | `JARGON_RE` — medical terms (metastasis, carcinoma, fibrosis…) | `jargon_translation` | V4 | 3.5s |
+| 5 | `COMPARATIVE_RE` — versus, compared to, higher/lower than… | `split_screen_vertical` | V3 | 1.0s |
+| 6 | `TOPIC_RULES` — 23 keyword strings (aging, cancer, heart…) | `contextual_broll` | V3 | 1.0s |
+| fallback | No match on any caption with citation | `article_reconstruction` | V4 | ≥5.0s |
+| always | End of video | `medical_endcard` | V5 | 3.0s |
+
+All trigger decisions are printed to backend stdout as `[TRIGGER] template | match='...' | caption='...' | t=Xs`.
+
+## Skill notes
+
+- Per-project notes are stored in `projects/{id}/skill_notes.json`.
+- Every save re-writes `.agents/skills/ai-video-studio/SKILL.md` appending a `## Learned skill notes` section.
+- Frontend: open Activity Log → expand any `graphic_placed` entry → click **Add note** → type improvement → **Save to skill**.
+- Notes are keyed by `graphic_id`, `template_id`, and `trigger` so future iterations can refine regex patterns.

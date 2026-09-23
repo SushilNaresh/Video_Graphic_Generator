@@ -39,12 +39,14 @@ from .models import (
 )
 from .storage import (
     append_activity,
+    append_skill_note,
     delete_project,
     default_project,
     ensure_project_dirs,
     list_project_summaries,
     load_project,
     read_activity,
+    read_skill_notes,
     safe_filename,
     save_project,
 )
@@ -184,6 +186,49 @@ def auto_produce(project_id: str):
 @app.get("/api/projects/{project_id}/activity-log")
 def get_activity_log(project_id: str):
     return read_activity(project_id)
+
+
+# ── Skill Notes ───────────────────────────────────────────────────────────────
+
+@app.get("/api/projects/{project_id}/skill-notes")
+def get_skill_notes(project_id: str):
+    return read_skill_notes(project_id)
+
+
+@app.post("/api/projects/{project_id}/skill-notes")
+def add_skill_note(project_id: str, payload: dict):
+    from datetime import datetime as _dt
+    note = {
+        "ts": _dt.utcnow().isoformat() + "Z",
+        "graphic_id": payload.get("graphic_id", ""),
+        "template_id": payload.get("template_id", ""),
+        "trigger": payload.get("trigger", ""),
+        "note": payload.get("note", "").strip(),
+        "author": payload.get("author", "user"),
+    }
+    append_skill_note(project_id, note)
+    _export_skill_md(project_id)
+    return note
+
+
+def _export_skill_md(project_id: str) -> None:
+    """Re-write .agents/skills/ai-video-studio/SKILL.md with latest skill notes appended."""
+    import json as _json
+    from pathlib import Path as _Path
+    notes = read_skill_notes(project_id)
+    if not notes:
+        return
+    skill_path = _Path(__file__).resolve().parents[3] / ".agents" / "skills" / "ai-video-studio" / "SKILL.md"
+    if not skill_path.exists():
+        return
+    base = skill_path.read_text(encoding="utf-8")
+    # Remove previous auto-generated block if present
+    marker = "\n\n## Learned skill notes (auto-generated)\n"
+    base = base.split(marker)[0]
+    lines = [marker.lstrip("\n")]
+    for n in notes:
+        lines.append(f"- **[{n['ts'][:10]}]** `{n['template_id']}` trigger=`{n['trigger']}` — {n['note']}")
+    skill_path.write_text(base + marker + "\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ── Manual Graphics ───────────────────────────────────────────────────────────

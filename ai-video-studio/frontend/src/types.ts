@@ -16,6 +16,15 @@ export interface ActivityEntry {
   search_query?: string;
 }
 
+export interface SkillNote {
+  ts: string;
+  graphic_id: string;
+  template_id: string;
+  trigger: string;
+  note: string;
+  author: string;
+}
+
 export type GraphicTemplateId =
   | 'split_screen_vertical'
   | 'article_reconstruction'
