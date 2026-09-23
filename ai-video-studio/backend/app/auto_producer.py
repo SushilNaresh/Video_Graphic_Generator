@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from .models import CaptionItem, MotionGraphicItem, ProjectState, TrackId, WordTiming
 from .storage import append_activity, ensure_project_dirs, write_json
 
 BROLL_SECONDS = 1.0
 
-# ── Regex patterns ────────────────────────────────────────────────────────────
+# ── Regex patterns (Pass 3 — Extraction) ─────────────────────────────────────
 
 MEASUREMENT_RE = re.compile(
     r"\b(\d+(?:\.\d+)?)\s?(cm|mm|feet|ft|meter|metre|inch|inches|%|percent|stage\s?\d+)\b", re.I
@@ -57,6 +59,71 @@ TOPIC_RULES: list[tuple[str, str, str, TrackId, float]] = [
     ("research",    "medical research laboratory scientist",     "contextual_broll", "V3", 1.0),
     ("study",       "medical journal research paper",            "contextual_broll", "V3", 1.0),
 ]
+
+
+# ── Pass 3: Extraction ───────────────────────────────────────────────────────
+# All regex/NER extraction lives here. generate_graphics() must not do extraction.
+
+@dataclass
+class CaptionAnnotation:
+    caption: CaptionItem
+    measurements: list[str] = field(default_factory=list)   # matched strings
+    stats: list[tuple[str, str]] = field(default_factory=list)  # (value, unit)
+    citations: list[str] = field(default_factory=list)      # matched phrases
+    jargon: list[str] = field(default_factory=list)         # matched terms
+    comparatives: list[str] = field(default_factory=list)   # matched phrases
+    topic_keyword: Optional[tuple[str, str]] = None         # (keyword, search_query)
+
+    @property
+    def has_any(self) -> bool:
+        return bool(self.measurements or self.stats or self.citations
+                    or self.jargon or self.comparatives or self.topic_keyword)
+
+
+def extract_annotations(captions: list[CaptionItem]) -> list[CaptionAnnotation]:
+    """Pass 3 — Entity Extraction / Claim Extraction.
+    Runs all regexes over every caption and returns structured annotations.
+    No graphic decisions are made here.
+    """
+    results: list[CaptionAnnotation] = []
+    for caption in captions:
+        text = caption.text
+        lowered = text.lower()
+        ann = CaptionAnnotation(caption=caption)
+
+        ann.measurements = [m.group(0) for m in MEASUREMENT_RE.finditer(text)]
+
+        stat_m = STAT_RE.search(text)
+        if stat_m and not ann.measurements:
+            ann.stats = [(stat_m.group(1), stat_m.group(2))]
+
+        cite_m = CITATION_RE.search(text)
+        if cite_m:
+            ann.citations = [cite_m.group(0)]
+
+        jargon_m = JARGON_RE.search(text)
+        if jargon_m:
+            ann.jargon = [jargon_m.group(0)]
+
+        comp_m = COMPARATIVE_RE.search(text)
+        if comp_m:
+            ann.comparatives = [comp_m.group(0)]
+
+        for keyword, query, *_ in TOPIC_RULES:
+            if keyword in lowered:
+                ann.topic_keyword = (keyword, query)
+                break
+
+        results.append(ann)
+        if ann.has_any:
+            print(
+                f"[PASS3] t={caption.start:.2f}s "
+                f"meas={ann.measurements} stats={ann.stats} "
+                f"cite={ann.citations} jargon={ann.jargon} "
+                f"comp={ann.comparatives} topic={ann.topic_keyword} "
+                f"| '{text[:60]}'"
+            )
+    return results
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -267,86 +334,82 @@ def _endcard(duration: float) -> MotionGraphicItem:
     )
 
 
-# ── Point 3: Expanded trigger engine ─────────────────────────────────────────
+# ── Pass 5 (partial): Graphic generation from annotations ───────────────────────
 
 def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
     from .stock_media import auto_download_for_graphic
 
-    captions = project.captions
+    annotations = extract_annotations(project.captions)
     graphics: list[MotionGraphicItem] = []
+
+    # Globally check if any citation exists across all captions
+    # Fixes false-positive fallback article_reconstruction
+    any_citation = any(ann.citations for ann in annotations)
     article_added = False
 
-    for caption in captions:
+    for ann in annotations:
+        caption = ann.caption
         text = caption.text
-        lowered = text.lower()
         s, e = caption.start, caption.end
 
-        # ── Measurements → dimension_callout ──────────────────────────────
-        for m in MEASUREMENT_RE.finditer(text):
-            print(f"[TRIGGER] dimension_callout | match='{m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            graphics.append(_dimension_callout(m.group(0), s, matched_text=m.group(0), caption_text=text))
+        for m in ann.measurements:
+            print(f"[TRIGGER] dimension_callout | match={m!r} | caption={text[:60]!r} | t={s:.2f}s")
+            graphics.append(_dimension_callout(m, s, matched_text=m, caption_text=text))
 
-        # ── Stats / percentages → stat_counter ───────────────────────────
-        stat_m = STAT_RE.search(text)
-        if stat_m and not MEASUREMENT_RE.search(text):
-            print(f"[TRIGGER] stat_counter | match='{stat_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            graphics.append(_stat_counter(stat_m.group(1), stat_m.group(2), s, matched_text=stat_m.group(0), caption_text=text))
+        for value, unit in ann.stats:
+            print(f"[TRIGGER] stat_counter | match={value+unit!r} | caption={text[:60]!r} | t={s:.2f}s")
+            graphics.append(_stat_counter(value, unit, s, matched_text=value+unit, caption_text=text))
 
-        # ── Research / study reference → article_reconstruction ──────────
-        cite_m = CITATION_RE.search(text)
-        if cite_m and not article_added:
-            print(f"[TRIGGER] article_reconstruction | match='{cite_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            g = _article(s, e + 4.0, title=text[:60].rstrip(".,:") + "…", paragraph=text, highlight=text[:80],
-                         matched_text=cite_m.group(0), caption_text=text, trigger_rule="citation_regex")
+        if ann.citations and not article_added:
+            cite = ann.citations[0]
+            print(f"[TRIGGER] article_reconstruction | match={cite!r} | caption={text[:60]!r} | t={s:.2f}s")
+            g = _article(s, e + 4.0, title=text[:60].rstrip(".,: ") + "…",
+                         paragraph=text, highlight=text[:80],
+                         matched_text=cite, caption_text=text, trigger_rule="citation_regex")
             graphics.append(g)
             article_added = True
             continue
 
-        # ── Medical jargon → jargon_translation ──────────────────────────
-        jargon_m = JARGON_RE.search(text)
-        if jargon_m:
-            print(f"[TRIGGER] jargon_translation | match='{jargon_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            graphics.append(_jargon_card(jargon_m.group(0), s, caption_text=text))
+        if ann.jargon:
+            term = ann.jargon[0]
+            print(f"[TRIGGER] jargon_translation | match={term!r} | caption={text[:60]!r} | t={s:.2f}s")
+            graphics.append(_jargon_card(term, s, caption_text=text))
             continue
 
-        # ── Comparative statement → split_screen_vertical ────────────────
-        comp_m = COMPARATIVE_RE.search(text)
-        if comp_m:
-            print(f"[TRIGGER] split_screen_vertical | match='{comp_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            query = f"comparison {' '.join(text.split()[:4])}"
+        if ann.comparatives:
+            comp = ann.comparatives[0]
+            print(f"[TRIGGER] split_screen_vertical | match={comp!r} | caption={text[:60]!r} | t={s:.2f}s")
+            query = "comparison " + " ".join(text.split()[:4])
             media_url = auto_download_for_graphic(project.id, query)
             graphics.append(_split_screen(
                 query,
-                f"Comparative language detected ('{comp_m.group(0)}') — split screen shows contrast.",
-                s, e, media_url, matched_text=comp_m.group(0), caption_text=text,
+                f"Comparative language detected ({comp!r}) — split screen shows contrast.",
+                s, e, media_url, matched_text=comp, caption_text=text,
             ))
             continue
 
-        # ── Topic keyword → contextual_broll ─────────────────────────────
-        for keyword, query, reasoning_label, track, dur in TOPIC_RULES:
-            if keyword in lowered:
-                print(f"[TRIGGER] contextual_broll | keyword='{keyword}' | query='{query}' | caption='{text[:60]}' | t={s:.2f}s")
-                media_url = auto_download_for_graphic(project.id, query)
-                g = _broll(query, f"Topic '{keyword}' detected — B-roll illustrates the concept.",
-                           s, e, media_url, matched_text=keyword, caption_text=text)
-                graphics.append(g)
-                break
+        if ann.topic_keyword:
+            keyword, query = ann.topic_keyword
+            print(f"[TRIGGER] contextual_broll | keyword={keyword!r} | query={query!r} | caption={text[:60]!r} | t={s:.2f}s")
+            media_url = auto_download_for_graphic(project.id, query)
+            graphics.append(_broll(
+                query, f"Topic {keyword!r} detected — B-roll illustrates the concept.",
+                s, e, media_url, matched_text=keyword, caption_text=text,
+            ))
 
-    # ── Fallback article if none was created ─────────────────────────────
-    if not article_added and captions:
-        anchor = captions[min(1, len(captions) - 1)]
-        graphics.append(_article(anchor.start, anchor.end + 4.0, "Clinical Evidence Snapshot",
-                             caption_text=anchor.text, trigger_rule="fallback_no_citation",
-                             matched_text="(no citation found — fallback card)"))
+    # Fallback article only when NO citation exists anywhere in transcript
+    if not article_added and not any_citation and project.captions:
+        anchor = project.captions[min(1, len(project.captions) - 1)]
+        print(f"[TRIGGER] article_reconstruction | fallback (no citation in transcript) | t={anchor.start:.2f}s")
+        graphics.append(_article(
+            anchor.start, anchor.end + 4.0, "Clinical Evidence Snapshot",
+            caption_text=anchor.text, trigger_rule="fallback_no_citation",
+            matched_text="(no citation found in transcript)",
+        ))
 
-    # ── End card ─────────────────────────────────────────────────────────
     graphics.append(_endcard(project.duration_seconds))
-
-    # ── Point 4: Resolve collisions ───────────────────────────────────────
     graphics = _resolve_collisions(graphics)
-
     return graphics
-
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 

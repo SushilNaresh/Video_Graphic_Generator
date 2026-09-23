@@ -53,3 +53,48 @@ All trigger decisions are printed to backend stdout as `[TRIGGER] template | mat
 - Every save re-writes `.agents/skills/ai-video-studio/SKILL.md` appending a `## Learned skill notes` section.
 - Frontend: open Activity Log → expand any `graphic_placed` entry → click **Add note** → type improvement → **Save to skill**.
 - Notes are keyed by `graphic_id`, `template_id`, and `trigger` so future iterations can refine regex patterns.
+
+## 5-Pass Auto-Production Architecture
+
+The auto-producer is structured as 5 sequential passes. Each pass has one input artifact and one output artifact. Never collapse passes — the dependency order is strict.
+
+### Pass 1 — Signal Understanding
+**Terms**: Multimodal Video Understanding, Temporal Grounding, Shot Boundary Detection
+**Input**: video file + raw transcript
+**Output**: `signal_map` — time-anchored segments with `{start, end, words[], shot_boundary, scene_label}`
+**Status**: Whisper (Temporal Grounding) ✓ done. Shot boundary + scene label = stubs.
+**Rule**: This is the only pass that reads the video file directly.
+
+### Pass 2 — Segmentation
+**Terms**: Semantic Segmentation, Narrative/Discourse Segmentation
+**Input**: `signal_map`
+**Output**: `segments[]` — each with `{start, end, captions[], semantic_topic, narrative_role: hook|setup|explanation|example|contrast|payoff|cta}`
+**Status**: Not implemented. Currently captions are used raw (each caption = one unit).
+**Rule**: Never segment while still reading signal. Pass 1 must be complete first.
+
+### Pass 3 — Extraction
+**Terms**: Entity Extraction/NER, Claim Extraction
+**Input**: `segments[]`
+**Output**: `annotations[]` — each segment gains `entities: [{text, type}]` and `claims: [{text, confidence}]`
+**Status**: Regexes exist (`STAT_RE`, `MEASUREMENT_RE`, `CITATION_RE`, `JARGON_RE`) but run inside the trigger loop. Must be moved to a dedicated `extract_annotations()` function.
+**Rule**: All regex/NER extraction belongs here only. The trigger loop must not do extraction.
+
+### Pass 4 — Decision
+**Terms**: Visual Opportunity Detection, Visual Intent Classification, Saliency/Importance Scoring, Visual Redundancy Detection, Editorial Density/Pacing Control
+**Input**: `annotations[]`
+**Output**: `opportunities[]` — `{segment_ref, intent: illustrate|prove|define|contrast|emphasise, saliency: float, composition: overlay|fullscreen|lower_third|split_screen, approved: bool}`
+**Status**: Not implemented. Keywords fire immediately without scoring, redundancy check, or pacing.
+**Rule**: Max 1 graphic per 8 seconds of video (pacing cap). Redundancy check must run before approval.
+
+### Pass 5 — Execution
+**Terms**: Editorial Planning, Asset Planning, Query Expansion, Visual Grounding, Temporal Placement, Composition Planning
+**Input**: `opportunities[]`
+**Output**: `project.graphics[]` — final `MotionGraphicItem` list
+**Status**: Factory functions (`_broll`, `_article`, etc.) exist but are called directly from trigger loop, bypassing Passes 2–4.
+**Rule**: This is the only pass that calls external APIs (Pexels, Pixabay, Wikimedia). Query expansion must derive from semantic meaning, not raw caption words.
+
+### Implementation order
+1. ✅ Pass 3 extraction — move regexes to `extract_annotations()` (no new dependencies)
+2. Pass 4 decision — add `score_opportunities()` with saliency ranking + 8s density cap
+3. Pass 2 segmentation — group captions by topic coherence (TF-IDF cosine, no ML needed)
+4. Pass 1 shot detection + Pass 5 visual grounding — stub until Twelve Labs API is wired
