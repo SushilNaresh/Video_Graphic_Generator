@@ -127,9 +127,14 @@ def _resolve_collisions(graphics: list[MotionGraphicItem]) -> list[MotionGraphic
 # ── Graphic factory functions ─────────────────────────────────────────────────
 
 def _broll(query: str, reasoning: str, start: float, end: float,
-           media_url: str | None = None) -> MotionGraphicItem:
+           media_url: str | None = None, matched_text: str = "",
+           caption_text: str = "") -> MotionGraphicItem:
     s, e = clamp_broll(start, end)
-    params: dict = {"search_query": query, "visual_reasoning": reasoning}
+    params: dict = {
+        "search_query": query, "visual_reasoning": reasoning,
+        "trigger_rule": "topic_keyword", "matched_text": matched_text,
+        "caption_text": caption_text,
+    }
     if media_url:
         params["media_url"] = media_url
     return MotionGraphicItem(
@@ -140,9 +145,14 @@ def _broll(query: str, reasoning: str, start: float, end: float,
 
 
 def _split_screen(query: str, reasoning: str, start: float, end: float,
-                  media_url: str | None = None) -> MotionGraphicItem:
+                  media_url: str | None = None, matched_text: str = "",
+                  caption_text: str = "") -> MotionGraphicItem:
     s, e = clamp_broll(start, end)
-    params: dict = {"search_query": query, "visual_reasoning": reasoning}
+    params: dict = {
+        "search_query": query, "visual_reasoning": reasoning,
+        "trigger_rule": "comparative", "matched_text": matched_text,
+        "caption_text": caption_text,
+    }
     if media_url:
         params["media_url"] = media_url
     return MotionGraphicItem(
@@ -152,25 +162,29 @@ def _split_screen(query: str, reasoning: str, start: float, end: float,
     )
 
 
-def _stat_counter(value: str, unit: str, start: float) -> MotionGraphicItem:
+def _stat_counter(value: str, unit: str, start: float,
+                  matched_text: str = "", caption_text: str = "") -> MotionGraphicItem:
     return MotionGraphicItem(
         id=f"stat_{uuid.uuid4().hex[:8]}", start=start, end=start + 3.0,
         template_id="stat_counter", title=f"Stat: {value}{unit}",
         parameters={
             "value": value, "unit": unit,
             "visual_reasoning": f"Speaker stated a statistic '{value}{unit}' — animated counter emphasises the number.",
+            "trigger_rule": "stat_regex", "matched_text": matched_text, "caption_text": caption_text,
         },
         track="V5",
     )
 
 
-def _dimension_callout(value: str, start: float) -> MotionGraphicItem:
+def _dimension_callout(value: str, start: float,
+                       matched_text: str = "", caption_text: str = "") -> MotionGraphicItem:
     return MotionGraphicItem(
         id=f"dim_{uuid.uuid4().hex[:8]}", start=start, end=start + 2.5,
         template_id="dimension_callout", title=f"Dimension: {value}",
         parameters={
             "value": value.upper(), "label": "Measured Statement",
             "visual_reasoning": f"Speaker stated a physical measurement '{value}' — HUD callout highlights the dimension.",
+            "trigger_rule": "measurement_regex", "matched_text": matched_text, "caption_text": caption_text,
         },
         track="V5",
     )
@@ -184,37 +198,42 @@ def _kinetic_typography(text: str, start: float) -> MotionGraphicItem:
         parameters={
             "text": snippet,
             "visual_reasoning": "Punchy comparative phrase detected — kinetic typography pop emphasises the contrast.",
+            "trigger_rule": "comparative", "matched_text": snippet, "caption_text": snippet,
         },
         track="V5",
     )
 
 
-def _source_citation(source: str, start: float) -> MotionGraphicItem:
+def _source_citation(source: str, start: float,
+                     caption_text: str = "") -> MotionGraphicItem:
     return MotionGraphicItem(
         id=f"cite_{uuid.uuid4().hex[:8]}", start=start, end=start + 2.5,
         template_id="source_citation", title=f"Citation: {source[:30]}",
         parameters={
             "source": source,
             "visual_reasoning": f"Speaker cited a source or study ('{source}') — citation overlay adds credibility.",
+            "trigger_rule": "citation_regex", "matched_text": source, "caption_text": caption_text,
         },
         track="V5",
     )
 
 
-def _jargon_card(term: str, start: float) -> MotionGraphicItem:
+def _jargon_card(term: str, start: float, caption_text: str = "") -> MotionGraphicItem:
     return MotionGraphicItem(
         id=f"jargon_{uuid.uuid4().hex[:8]}", start=start, end=start + 3.5,
         template_id="jargon_translation", title=f"Jargon: {term}",
         parameters={
             "term": term,
             "visual_reasoning": f"Medical jargon '{term}' detected — translation card helps viewers understand the term.",
+            "trigger_rule": "jargon_regex", "matched_text": term, "caption_text": caption_text,
         },
         track="V4",
     )
 
 
 def _article(start: float, end: float, title: str, paragraph: str = "",
-             highlight: str = "") -> MotionGraphicItem:
+             highlight: str = "", matched_text: str = "",
+             caption_text: str = "", trigger_rule: str = "citation_regex") -> MotionGraphicItem:
     return MotionGraphicItem(
         id=f"article_{uuid.uuid4().hex[:8]}", start=start, end=max(end, start + 5.0),
         template_id="article_reconstruction", title=title,
@@ -229,6 +248,7 @@ def _article(start: float, end: float, title: str, paragraph: str = "",
             "marker_color": "#FB923C",
             "show_image": False,
             "visual_reasoning": f"Research/study reference detected — article reconstruction surfaces the evidence on screen.",
+            "trigger_rule": trigger_rule, "matched_text": matched_text, "caption_text": caption_text,
         },
         track="V4",
     )
@@ -264,19 +284,20 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
         # ── Measurements → dimension_callout ──────────────────────────────
         for m in MEASUREMENT_RE.finditer(text):
             print(f"[TRIGGER] dimension_callout | match='{m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            graphics.append(_dimension_callout(m.group(0), s))
+            graphics.append(_dimension_callout(m.group(0), s, matched_text=m.group(0), caption_text=text))
 
         # ── Stats / percentages → stat_counter ───────────────────────────
         stat_m = STAT_RE.search(text)
         if stat_m and not MEASUREMENT_RE.search(text):
             print(f"[TRIGGER] stat_counter | match='{stat_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            graphics.append(_stat_counter(stat_m.group(1), stat_m.group(2), s))
+            graphics.append(_stat_counter(stat_m.group(1), stat_m.group(2), s, matched_text=stat_m.group(0), caption_text=text))
 
         # ── Research / study reference → article_reconstruction ──────────
         cite_m = CITATION_RE.search(text)
         if cite_m and not article_added:
             print(f"[TRIGGER] article_reconstruction | match='{cite_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            g = _article(s, e + 4.0, title=text[:60].rstrip(".,:") + "…", paragraph=text, highlight=text[:80])
+            g = _article(s, e + 4.0, title=text[:60].rstrip(".,:") + "…", paragraph=text, highlight=text[:80],
+                         matched_text=cite_m.group(0), caption_text=text, trigger_rule="citation_regex")
             graphics.append(g)
             article_added = True
             continue
@@ -285,7 +306,7 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
         jargon_m = JARGON_RE.search(text)
         if jargon_m:
             print(f"[TRIGGER] jargon_translation | match='{jargon_m.group(0)}' | caption='{text[:60]}' | t={s:.2f}s")
-            graphics.append(_jargon_card(jargon_m.group(0), s))
+            graphics.append(_jargon_card(jargon_m.group(0), s, caption_text=text))
             continue
 
         # ── Comparative statement → split_screen_vertical ────────────────
@@ -297,7 +318,7 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
             graphics.append(_split_screen(
                 query,
                 f"Comparative language detected ('{comp_m.group(0)}') — split screen shows contrast.",
-                s, e, media_url,
+                s, e, media_url, matched_text=comp_m.group(0), caption_text=text,
             ))
             continue
 
@@ -306,14 +327,17 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
             if keyword in lowered:
                 print(f"[TRIGGER] contextual_broll | keyword='{keyword}' | query='{query}' | caption='{text[:60]}' | t={s:.2f}s")
                 media_url = auto_download_for_graphic(project.id, query)
-                g = _broll(query, f"Topic '{keyword}' detected — B-roll illustrates the concept.", s, e, media_url)
+                g = _broll(query, f"Topic '{keyword}' detected — B-roll illustrates the concept.",
+                           s, e, media_url, matched_text=keyword, caption_text=text)
                 graphics.append(g)
                 break
 
     # ── Fallback article if none was created ─────────────────────────────
     if not article_added and captions:
         anchor = captions[min(1, len(captions) - 1)]
-        graphics.append(_article(anchor.start, anchor.end + 4.0, "Clinical Evidence Snapshot"))
+        graphics.append(_article(anchor.start, anchor.end + 4.0, "Clinical Evidence Snapshot",
+                             caption_text=anchor.text, trigger_rule="fallback_no_citation",
+                             matched_text="(no citation found — fallback card)"))
 
     # ── End card ─────────────────────────────────────────────────────────
     graphics.append(_endcard(project.duration_seconds))
@@ -364,6 +388,9 @@ def run_auto_production(project: ProjectState) -> ProjectState:
             "start": g.start, "end": g.end,
             "reason": g.parameters.get("visual_reasoning", "Generated by semantic trigger engine."),
             "search_query": g.parameters.get("search_query", ""),
+            "trigger_rule": g.parameters.get("trigger_rule", ""),
+            "matched_text": g.parameters.get("matched_text", ""),
+            "caption_text": g.parameters.get("caption_text", ""),
         }
         for g in project.graphics
     ]

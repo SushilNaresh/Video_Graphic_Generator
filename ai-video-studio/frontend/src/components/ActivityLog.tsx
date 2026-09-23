@@ -15,6 +15,9 @@ export interface ActivityEntry {
   caption_count?: number;
   graphic_count?: number;
   search_query?: string;
+  trigger_rule?: string;
+  matched_text?: string;
+  caption_text?: string;
 }
 
 const EVENT_META: Record<string, { icon: unknown; color: string; label: string }> = {
@@ -168,6 +171,19 @@ export function ActivityLog({
                   <p className="activity-reason">{entry.reason}</p>
                   {entry.search_query && (
                     <p className="activity-meta">Search query: <em>{entry.search_query}</em></p>
+                  )}
+                  {isGraphicPlaced && (entry.caption_text || entry.matched_text) && (
+                    <div className="activity-trigger-block">
+                      {entry.trigger_rule && (
+                        <span className="activity-trigger-rule">rule: {entry.trigger_rule.replace(/_/g, ' ')}</span>
+                      )}
+                      {entry.matched_text && (
+                        <p className="activity-trigger-match">matched: <strong>&ldquo;{entry.matched_text}&rdquo;</strong></p>
+                      )}
+                      {entry.caption_text && (
+                        <p className="activity-trigger-caption">&ldquo;{entry.caption_text}&rdquo;</p>
+                      )}
+                    </div>
                   )}
                   {entryNotes.map((n, ni) => (
                     <div key={ni} className="activity-skill-note">

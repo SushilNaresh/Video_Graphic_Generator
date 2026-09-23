@@ -14,6 +14,9 @@ export interface ActivityEntry {
   caption_count?: number;
   graphic_count?: number;
   search_query?: string;
+  trigger_rule?: string;
+  matched_text?: string;
+  caption_text?: string;
 }
 
 export interface SkillNote {
