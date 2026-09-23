@@ -80,12 +80,15 @@ class CaptionAnnotation:
                     or self.jargon or self.comparatives or self.topic_keyword)
 
 
-def extract_annotations(captions: list[CaptionItem]) -> list[CaptionAnnotation]:
+def extract_annotations(captions: list[CaptionItem], project_id: str = "") -> list[CaptionAnnotation]:
     """Pass 3 — Entity Extraction / Claim Extraction.
     Runs all regexes over every caption and returns structured annotations.
     No graphic decisions are made here.
     """
     results: list[CaptionAnnotation] = []
+    activity_entries: list[dict] = []
+    ts = datetime.utcnow().isoformat() + "Z"
+
     for caption in captions:
         text = caption.text
         lowered = text.lower()
@@ -115,14 +118,60 @@ def extract_annotations(captions: list[CaptionItem]) -> list[CaptionAnnotation]:
                 break
 
         results.append(ann)
+
         if ann.has_any:
-            print(
-                f"[PASS3] t={caption.start:.2f}s "
-                f"meas={ann.measurements} stats={ann.stats} "
-                f"cite={ann.citations} jargon={ann.jargon} "
-                f"comp={ann.comparatives} topic={ann.topic_keyword} "
-                f"| '{text[:60]}'"
-            )
+            found: list[str] = []
+            if ann.measurements:
+                found.append(f"measurement: {', '.join(ann.measurements)}")
+            if ann.stats:
+                found.append(f"stat: {''.join(v+u for v,u in ann.stats)}")
+            if ann.citations:
+                found.append(f"citation: {ann.citations[0]}")
+            if ann.jargon:
+                found.append(f"jargon: {ann.jargon[0]}")
+            if ann.comparatives:
+                found.append(f"comparative: {ann.comparatives[0]}")
+            if ann.topic_keyword:
+                found.append(f"topic keyword: {ann.topic_keyword[0]}")
+
+            summary = " | ".join(found)
+            print(f"[PASS3] t={caption.start:.2f}s {summary} | '{text[:60]}'")
+
+            activity_entries.append({
+                "ts": ts,
+                "event": "pass3_extraction",
+                "start": caption.start,
+                "end": caption.end,
+                "caption_text": text,
+                "matched_text": summary,
+                "trigger_rule": "pass3",
+                "reason": (
+                    f"Pass 3 extracted from caption at {caption.start:.2f}s: {summary}. "
+                    f"No graphic decision yet — this is pure extraction."
+                ),
+            })
+
+    if project_id and activity_entries:
+        append_activity(project_id, [
+            {
+                "ts": ts, "event": "pass3_start",
+                "caption_count": len(captions),
+                "reason": f"Pass 3 (Extraction) scanning {len(captions)} captions for measurements, stats, citations, jargon, comparatives, topic keywords.",
+            },
+            *activity_entries,
+            {
+                "ts": ts, "event": "pass3_done",
+                "caption_count": len(captions),
+                "reason": (
+                    f"Pass 3 complete. {len(activity_entries)}/{len(captions)} captions had extractable signals. "
+                    f"Citations found: {sum(1 for a in results if a.citations)}. "
+                    f"Jargon: {sum(1 for a in results if a.jargon)}. "
+                    f"Stats: {sum(1 for a in results if a.stats)}. "
+                    f"Topic keywords: {sum(1 for a in results if a.topic_keyword)}."
+                ),
+            },
+        ])
+
     return results
 
 
@@ -339,7 +388,7 @@ def _endcard(duration: float) -> MotionGraphicItem:
 def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
     from .stock_media import auto_download_for_graphic
 
-    annotations = extract_annotations(project.captions)
+    annotations = extract_annotations(project.captions, project_id=project.id)
     graphics: list[MotionGraphicItem] = []
 
     # Globally check if any citation exists across all captions
