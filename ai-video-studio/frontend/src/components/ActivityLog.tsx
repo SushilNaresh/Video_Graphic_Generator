@@ -117,11 +117,13 @@ export function ActivityLog({
   skillNotes,
   onJumpTo,
   onAddNote,
+  onClearLog,
 }: {
   entries: ActivityEntry[];
   skillNotes: SkillNote[];
   onJumpTo?: (time: number) => void;
   onAddNote?: (graphicId: string, templateId: string, trigger: string, note: string) => Promise<void>;
+  onClearLog?: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -140,6 +142,15 @@ export function ActivityLog({
           <span className="activity-log-count" style={{ background: '#a78bfa22', color: '#a78bfa' }}>
             <BookOpen size={11} /> {skillNotes.length} notes
           </span>
+        )}
+        {onClearLog && entries.length > 0 && (
+          <button
+            className="activity-log-clear"
+            onClick={(e) => { e.stopPropagation(); onClearLog(); }}
+            title="Clear log — run Auto Produce again to see fresh Pass 3 events"
+          >
+            <Trash2 size={11} /> Clear
+          </button>
         )}
         {open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
       </button>

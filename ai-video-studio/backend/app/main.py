@@ -188,6 +188,15 @@ def get_activity_log(project_id: str):
     return read_activity(project_id)
 
 
+@app.delete("/api/projects/{project_id}/activity-log")
+def clear_activity_log(project_id: str):
+    from .storage import activity_log_path
+    path = activity_log_path(project_id)
+    if path.exists():
+        path.unlink()
+    return {"cleared": True}
+
+
 # ── Skill Notes ───────────────────────────────────────────────────────────────
 
 @app.get("/api/projects/{project_id}/skill-notes")

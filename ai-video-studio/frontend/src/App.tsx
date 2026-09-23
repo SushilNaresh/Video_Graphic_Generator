@@ -165,6 +165,12 @@ export default function App() {
     await refreshActivity(project.id);
   }
 
+  async function handleClearLog() {
+    if (!project) return;
+    await api.clearActivityLog(project.id);
+    setActivityLog([]);
+  }
+
   function upsertGraphic(graphic: MotionGraphicItem) {
     updateProject((p) => ({ ...p, graphics: p.graphics.map((g) => (g.id === graphic.id ? graphic : g)) }));
   }
@@ -239,7 +245,7 @@ export default function App() {
           onSeek={setCurrentTime} onSelectGraphic={setSelectedGraphicId} onProjectChange={setProject}
         />
 
-        <ActivityLog entries={activityLog} skillNotes={skillNotes} onJumpTo={setCurrentTime} onAddNote={handleAddSkillNote} />
+        <ActivityLog entries={activityLog} skillNotes={skillNotes} onJumpTo={setCurrentTime} onAddNote={handleAddSkillNote} onClearLog={handleClearLog} />
       </section>
     </main>
   );

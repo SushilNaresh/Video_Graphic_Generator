@@ -59,6 +59,8 @@ export const api = {
       body: JSON.stringify({ project_id: projectId, item })
     }),
   getActivityLog: (projectId: string) => json<ActivityEntry[]>(`/api/projects/${projectId}/activity-log`),
+  clearActivityLog: (projectId: string) =>
+    json<{ cleared: boolean }>(`/api/projects/${projectId}/activity-log`, { method: 'DELETE' }),
   getSkillNotes: (projectId: string) => json<SkillNote[]>(`/api/projects/${projectId}/skill-notes`),
   addSkillNote: (projectId: string, payload: Omit<SkillNote, 'ts' | 'author'>) =>
     json<SkillNote>(`/api/projects/${projectId}/skill-notes`, { method: 'POST', body: JSON.stringify(payload) }),
