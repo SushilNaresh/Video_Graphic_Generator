@@ -18,6 +18,8 @@ export interface ActivityEntry {
   trigger_rule?: string;
   matched_text?: string;
   caption_text?: string;
+  saliency?: number;
+  intent?: string;
 }
 
 const EVENT_META: Record<string, { icon: unknown; color: string; label: string }> = {
@@ -36,6 +38,10 @@ const EVENT_META: Record<string, { icon: unknown; color: string; label: string }
   pass3_start:                { icon: <Search size={13} />,      color: '#38bdf8', label: 'Pass 3: Extraction started' },
   pass3_extraction:           { icon: <Search size={13} />,      color: '#22d3ee', label: 'Pass 3: Signal found' },
   pass3_done:                 { icon: <CheckCircle2 size={13} />,color: '#38bdf8', label: 'Pass 3: Extraction done' },
+  pass4_start:                { icon: <Activity size={13} />,    color: '#fb923c', label: 'Pass 4: Decision started' },
+  pass4_approved:             { icon: <CheckCircle2 size={13} />,color: '#4ade80', label: 'Pass 4: Approved' },
+  pass4_rejected:             { icon: <Trash2 size={13} />,      color: '#f87171', label: 'Pass 4: Rejected' },
+  pass4_done:                 { icon: <CheckCircle2 size={13} />,color: '#fb923c', label: 'Pass 4: Decision done' },
   graphic_placed:             { icon: <Activity size={13} />,    color: '#34d399', label: 'Graphic placed' },
   graphic_added_manual:       { icon: <Plus size={13} />,        color: '#38bdf8', label: 'Graphic added' },
   graphic_deleted:            { icon: <Trash2 size={13} />,      color: '#f87171', label: 'Graphic deleted' },
@@ -185,6 +191,22 @@ export function ActivityLog({
                   <p className="activity-reason">{entry.reason}</p>
                   {entry.search_query && (
                     <p className="activity-meta">Search query: <em>{entry.search_query}</em></p>
+                  )}
+                  {(entry.event === 'pass4_approved' || entry.event === 'pass4_rejected') && (
+                    <div className="activity-trigger-block">
+                      {entry.trigger_rule && <span className="activity-trigger-rule">signal: {entry.trigger_rule}</span>}
+                      {entry.saliency !== undefined && (
+                        <span className="activity-trigger-rule" style={{ color: '#fb923c' }}>
+                          saliency: {entry.saliency.toFixed(2)} &nbsp;|&nbsp; intent: {entry.intent ?? '—'}
+                        </span>
+                      )}
+                      {entry.matched_text && (
+                        <p className="activity-trigger-match">matched: <strong>&ldquo;{entry.matched_text}&rdquo;</strong></p>
+                      )}
+                      {entry.caption_text && (
+                        <p className="activity-trigger-caption">&ldquo;{entry.caption_text}&rdquo;</p>
+                      )}
+                    </div>
                   )}
                   {isGraphicPlaced && (entry.caption_text || entry.matched_text) && (
                     <div className="activity-trigger-block">

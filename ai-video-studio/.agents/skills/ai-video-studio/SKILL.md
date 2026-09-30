@@ -83,8 +83,8 @@ The auto-producer is structured as 5 sequential passes. Each pass has one input 
 **Terms**: Visual Opportunity Detection, Visual Intent Classification, Saliency/Importance Scoring, Visual Redundancy Detection, Editorial Density/Pacing Control
 **Input**: `annotations[]`
 **Output**: `opportunities[]` — `{segment_ref, intent: illustrate|prove|define|contrast|emphasise, saliency: float, composition: overlay|fullscreen|lower_third|split_screen, approved: bool}`
-**Status**: Not implemented. Keywords fire immediately without scoring, redundancy check, or pacing.
-**Rule**: Max 1 graphic per 8 seconds of video (pacing cap). Redundancy check must run before approval.
+**Status**: Implemented. `score_opportunities()` scores each annotation by saliency (citation=1.0 > measurement=0.9 > stat=0.85 > jargon=0.8 > comparative=0.7 > topic_keyword=0.5), picks best signal per caption, applies 8s density cap. `generate_graphics()` only executes approved opportunities. Logs `pass4_start`, `pass4_approved`, `pass4_rejected`, `pass4_done`.
+**Rule**: Max 1 graphic per 8 seconds (DENSITY_GAP_SECONDS). Redundancy check is next iteration.
 
 ### Pass 5 — Execution
 **Terms**: Editorial Planning, Asset Planning, Query Expansion, Visual Grounding, Temporal Placement, Composition Planning
@@ -95,6 +95,6 @@ The auto-producer is structured as 5 sequential passes. Each pass has one input 
 
 ### Implementation order
 1. ✅ Pass 3 extraction — move regexes to `extract_annotations()` (no new dependencies)
-2. Pass 4 decision — add `score_opportunities()` with saliency ranking + 8s density cap
+2. ✅ Pass 4 decision — `score_opportunities()` with saliency ranking + 8s density cap
 3. Pass 2 segmentation — group captions by topic coherence (TF-IDF cosine, no ML needed)
 4. Pass 1 shot detection + Pass 5 visual grounding — stub until Twelve Labs API is wired

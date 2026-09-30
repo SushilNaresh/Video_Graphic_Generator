@@ -17,6 +17,8 @@ export interface ActivityEntry {
   trigger_rule?: string;
   matched_text?: string;
   caption_text?: string;
+  saliency?: number;
+  intent?: string;
 }
 
 export interface SkillNote {

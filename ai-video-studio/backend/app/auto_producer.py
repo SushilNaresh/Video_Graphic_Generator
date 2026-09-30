@@ -383,63 +383,225 @@ def _endcard(duration: float) -> MotionGraphicItem:
     )
 
 
+# ── Pass 4: Decision ───────────────────────────────────────────────────────────────────
+# Visual Opportunity Detection, Visual Intent Classification,
+# Saliency/Importance Scoring, Editorial Density/Pacing Control
+
+DENSITY_GAP_SECONDS = 8.0  # max 1 graphic per 8s window
+
+SALIENCY: dict[str, float] = {
+    "citation":      1.00,
+    "measurement":   0.90,
+    "stat":          0.85,
+    "jargon":        0.80,
+    "comparative":   0.70,
+    "topic_keyword": 0.50,
+}
+
+INTENT: dict[str, str] = {
+    "citation":      "prove",
+    "measurement":   "emphasise",
+    "stat":          "emphasise",
+    "jargon":        "define",
+    "comparative":   "contrast",
+    "topic_keyword": "illustrate",
+}
+
+
+@dataclass
+class VisualOpportunity:
+    annotation: CaptionAnnotation
+    signal_type: str       # citation | measurement | stat | jargon | comparative | topic_keyword
+    matched_text: str
+    saliency: float        # 0.0 - 1.0
+    intent: str            # prove | emphasise | define | contrast | illustrate
+    approved: bool = False
+    rejection_reason: str = ""
+
+
+def score_opportunities(
+    annotations: list[CaptionAnnotation],
+    project_id: str = "",
+) -> list[VisualOpportunity]:
+    """Pass 4 - Decision layer.
+    For each annotation pick the single highest-saliency signal,
+    score it, then apply the density cap (max 1 graphic per 8s).
+    Logs every approval and rejection to the activity log.
+    """
+    ts = datetime.utcnow().isoformat() + "Z"
+    candidates: list[VisualOpportunity] = []
+
+    for ann in annotations:
+        signals: list[tuple[str, str]] = []
+        if ann.citations:
+            signals.append(("citation", ann.citations[0]))
+        if ann.measurements:
+            signals.append(("measurement", ann.measurements[0]))
+        if ann.stats:
+            v, u = ann.stats[0]
+            signals.append(("stat", v + u))
+        if ann.jargon:
+            signals.append(("jargon", ann.jargon[0]))
+        if ann.comparatives:
+            signals.append(("comparative", ann.comparatives[0]))
+        if ann.topic_keyword:
+            signals.append(("topic_keyword", ann.topic_keyword[0]))
+
+        if not signals:
+            continue
+
+        best_type, best_match = max(signals, key=lambda s: SALIENCY[s[0]])
+        candidates.append(VisualOpportunity(
+            annotation=ann,
+            signal_type=best_type,
+            matched_text=best_match,
+            saliency=SALIENCY[best_type],
+            intent=INTENT[best_type],
+        ))
+
+    candidates.sort(key=lambda o: o.annotation.caption.start)
+
+    last_approved_t: float = -DENSITY_GAP_SECONDS
+    approved_count = 0
+    rejected_count = 0
+    activity_entries: list[dict] = []
+
+    for opp in candidates:
+        t = opp.annotation.caption.start
+        gap = round(t - last_approved_t, 2)
+
+        if gap >= DENSITY_GAP_SECONDS:
+            opp.approved = True
+            last_approved_t = t
+            approved_count += 1
+            reason = (
+                f"APPROVED | signal={opp.signal_type} match={opp.matched_text!r} "
+                f"saliency={opp.saliency:.2f} intent={opp.intent} "
+                f"gap={gap}s (>= {DENSITY_GAP_SECONDS}s cap). "
+                f"Caption: {opp.annotation.caption.text[:80]!r}"
+            )
+        else:
+            opp.approved = False
+            opp.rejection_reason = (
+                f"gap={gap}s < {DENSITY_GAP_SECONDS}s density cap. "
+                f"Last graphic at {last_approved_t:.1f}s. "
+                f"signal={opp.signal_type} saliency={opp.saliency:.2f}."
+            )
+            rejected_count += 1
+            reason = (
+                f"REJECTED | {opp.rejection_reason} "
+                f"Caption: {opp.annotation.caption.text[:80]!r}"
+            )
+
+        print(
+            f"[PASS4] t={t:.2f}s {'APPROVED' if opp.approved else 'REJECTED'} "
+            f"signal={opp.signal_type!r} saliency={opp.saliency:.2f} "
+            f"gap={gap}s match={opp.matched_text!r}"
+        )
+
+        activity_entries.append({
+            "ts": ts,
+            "event": "pass4_approved" if opp.approved else "pass4_rejected",
+            "start": t,
+            "end": opp.annotation.caption.end,
+            "caption_text": opp.annotation.caption.text,
+            "matched_text": opp.matched_text,
+            "trigger_rule": opp.signal_type,
+            "saliency": opp.saliency,
+            "intent": opp.intent,
+            "reason": reason,
+        })
+
+    approved_list = ", ".join(
+        f"{o.signal_type}@{o.annotation.caption.start:.1f}s"
+        for o in candidates if o.approved
+    ) or "none"
+
+    if project_id:
+        append_activity(project_id, [
+            {
+                "ts": ts, "event": "pass4_start",
+                "caption_count": len(candidates),
+                "reason": (
+                    f"Pass 4 (Decision) scoring {len(candidates)} candidates from Pass 3. "
+                    f"Density cap: 1 graphic per {DENSITY_GAP_SECONDS}s. "
+                    f"Saliency order: citation(1.0) > measurement(0.9) > stat(0.85) "
+                    f"> jargon(0.8) > comparative(0.7) > topic_keyword(0.5)."
+                ),
+            },
+            *activity_entries,
+            {
+                "ts": ts, "event": "pass4_done",
+                "caption_count": len(candidates),
+                "reason": (
+                    f"Pass 4 complete. {approved_count} approved, {rejected_count} rejected. "
+                    f"Approved: {approved_list}."
+                ),
+            },
+        ])
+
+    return candidates
+
+
 # ── Pass 5 (partial): Graphic generation from annotations ───────────────────────
 
 def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
+    """Pass 5 (partial) - Execution.
+    Consumes approved VisualOpportunity objects from Pass 4.
+    Only approved opportunities get graphics placed.
+    """
     from .stock_media import auto_download_for_graphic
 
     annotations = extract_annotations(project.captions, project_id=project.id)
+    opportunities = score_opportunities(annotations, project_id=project.id)
     graphics: list[MotionGraphicItem] = []
 
-    # Globally check if any citation exists across all captions
-    # Fixes false-positive fallback article_reconstruction
     any_citation = any(ann.citations for ann in annotations)
     article_added = False
 
-    for ann in annotations:
+    for opp in opportunities:
+        if not opp.approved:
+            continue
+
+        ann = opp.annotation
         caption = ann.caption
         text = caption.text
         s, e = caption.start, caption.end
+        sig = opp.signal_type
 
-        for m in ann.measurements:
-            print(f"[TRIGGER] dimension_callout | match={m!r} | caption={text[:60]!r} | t={s:.2f}s")
-            graphics.append(_dimension_callout(m, s, matched_text=m, caption_text=text))
+        print(f"[PASS5] t={s:.2f}s executing signal={sig!r} match={opp.matched_text!r}")
 
-        for value, unit in ann.stats:
-            print(f"[TRIGGER] stat_counter | match={value+unit!r} | caption={text[:60]!r} | t={s:.2f}s")
-            graphics.append(_stat_counter(value, unit, s, matched_text=value+unit, caption_text=text))
-
-        if ann.citations and not article_added:
-            cite = ann.citations[0]
-            print(f"[TRIGGER] article_reconstruction | match={cite!r} | caption={text[:60]!r} | t={s:.2f}s")
+        if sig == "citation" and not article_added:
             g = _article(s, e + 4.0, title=text[:60].rstrip(".,: ") + "…",
                          paragraph=text, highlight=text[:80],
-                         matched_text=cite, caption_text=text, trigger_rule="citation_regex")
+                         matched_text=opp.matched_text, caption_text=text,
+                         trigger_rule="citation_regex")
             graphics.append(g)
             article_added = True
-            continue
 
-        if ann.jargon:
-            term = ann.jargon[0]
-            print(f"[TRIGGER] jargon_translation | match={term!r} | caption={text[:60]!r} | t={s:.2f}s")
-            graphics.append(_jargon_card(term, s, caption_text=text))
-            continue
+        elif sig == "measurement":
+            graphics.append(_dimension_callout(
+                opp.matched_text, s, matched_text=opp.matched_text, caption_text=text))
 
-        if ann.comparatives:
-            comp = ann.comparatives[0]
-            print(f"[TRIGGER] split_screen_vertical | match={comp!r} | caption={text[:60]!r} | t={s:.2f}s")
+        elif sig == "stat":
+            parts = ann.stats[0] if ann.stats else (opp.matched_text, "")
+            graphics.append(_stat_counter(
+                parts[0], parts[1], s, matched_text=opp.matched_text, caption_text=text))
+
+        elif sig == "jargon":
+            graphics.append(_jargon_card(opp.matched_text, s, caption_text=text))
+
+        elif sig == "comparative":
             query = "comparison " + " ".join(text.split()[:4])
             media_url = auto_download_for_graphic(project.id, query)
             graphics.append(_split_screen(
                 query,
-                f"Comparative language detected ({comp!r}) — split screen shows contrast.",
-                s, e, media_url, matched_text=comp, caption_text=text,
+                f"Comparative language detected ({opp.matched_text!r}) — split screen shows contrast.",
+                s, e, media_url, matched_text=opp.matched_text, caption_text=text,
             ))
-            continue
 
-        if ann.topic_keyword:
+        elif sig == "topic_keyword":
             keyword, query = ann.topic_keyword
-            print(f"[TRIGGER] contextual_broll | keyword={keyword!r} | query={query!r} | caption={text[:60]!r} | t={s:.2f}s")
             media_url = auto_download_for_graphic(project.id, query)
             graphics.append(_broll(
                 query, f"Topic {keyword!r} detected — B-roll illustrates the concept.",
@@ -447,9 +609,11 @@ def generate_graphics(project: ProjectState) -> list[MotionGraphicItem]:
             ))
 
     # Fallback article only when NO citation exists anywhere in transcript
-    if not article_added and not any_citation and project.captions:
+    # and Pass 4 approved at least one opportunity (video has real content)
+    approved_any = any(o.approved for o in opportunities)
+    if not article_added and not any_citation and project.captions and approved_any:
         anchor = project.captions[min(1, len(project.captions) - 1)]
-        print(f"[TRIGGER] article_reconstruction | fallback (no citation in transcript) | t={anchor.start:.2f}s")
+        print(f"[PASS5] fallback article_reconstruction | t={anchor.start:.2f}s")
         graphics.append(_article(
             anchor.start, anchor.end + 4.0, "Clinical Evidence Snapshot",
             caption_text=anchor.text, trigger_rule="fallback_no_citation",
